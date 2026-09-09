@@ -1,96 +1,156 @@
-const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const cors = require('cors');
-const path = require('path');
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal Asisten Koas</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { background-color: #f8fafc; color: #0f172a; padding: 1.5rem; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 440px; }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.04); margin-bottom: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
+    p { font-size: 0.875rem; color: #64748b; margin: 0 0 1rem 0; line-height: 1.4; }
+    label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.35rem; }
+    input, textarea { width: 100%; padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem; margin-bottom: 1rem; }
+    button { width: 100%; background: #0284c7; color: white; border: none; padding: 0.75rem; border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .token-badge { display: inline-block; background: #e0f2fe; color: #0369a1; padding: 0.25rem 0.75rem; border-radius: 9999px; font-weight: 600; font-size: 0.85rem; margin-bottom: 1rem; }
+    .status-msg { font-size: 0.85rem; padding: 0.5rem; border-radius: 6px; display: none; margin-top: 0.5rem; }
+    .status-error { background: #fee2e2; color: #dc2626; display: block; }
+    .status-success { background: #dcfce7; color: #16a34a; display: block; }
+    .output-box { margin-top: 1rem; padding: 0.75rem; background: #f1f5f9; border-radius: 8px; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
 
-const app = express();
-app.use(express.json());
-app.use(cors());
+<div class="container">
+  <div class="card" id="authSection">
+    <h1>Portal Alat Koas</h1>
+    <p>Dapatkan <b>5 Token Gratis</b> untuk uji coba pemrosesan data tugas/stase klinik.</p>
+    <label for="emailInput">Email Kampus / Gmail</label>
+    <input type="email" id="emailInput" placeholder="nama@gmail.com">
+    <button onclick="registerUser()">Mulai Trial Gratis</button>
+    <div id="authStatus" class="status-msg"></div>
+  </div>
 
-// Menyajikan file antarmuka statis dari folder root
-app.use(express.static(__dirname));
+  <div class="card" id="mainSection" style="display: none;">
+    <h1>Pemrosesan Data</h1>
+    <div class="token-badge">Sisa Token: <span id="tokenDisplay">0</span></div>
+    
+    <label for="taskInput">Teks / Kasus Klinis</label>
+    <textarea id="taskInput" rows="4" placeholder="Ketik ringkasan atau data yang ingin diproses..."></textarea>
+    
+    <button id="processBtn" onclick="runTask()">Jalankan Sistem (Pakai 1 Token)</button>
+    <div id="taskStatus" class="status-msg"></div>
 
-// 1. Inisialisasi Database SQLite
-const db = new sqlite3.Database('./koas_app.db', (err) => {
-  if (err) console.error('Gagal membuka database:', err.message);
-  else console.log('Terkoneksi ke database SQLite.');
-});
+    <div id="outputArea" style="display: none;">
+      <label style="margin-top: 1rem;">Hasil Sistem:</label>
+      <div class="output-box" id="resultText"></div>
+    </div>
+  </div>
+</div>
 
-// 2. Buat Tabel Data
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE,
-      token_balance INTEGER DEFAULT 5
-    )
-  `);
+<script>
+  let currentUserId = localStorage.getItem('koas_user_id');
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS token_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      amount INTEGER,
-      action TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-});
+  window.onload = () => {
+    if (currentUserId) loadUserData(currentUserId);
+  };
 
-// 3. Endpoint Registrasi (Otomatis 5 Token Gratis)
-app.post('/api/register', (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email wajib diisi.' });
+  async function registerUser() {
+    const email = document.getElementById('emailInput').value.trim();
+    const status = document.getElementById('authStatus');
+    if (!email) return showStatus(status, 'Isi email terlebih dahulu.', true);
 
-  db.run(`INSERT INTO users (email, token_balance) VALUES (?, 5)`, [email], function (err) {
-    if (err) {
-      return res.status(400).json({ error: 'Email sudah terdaftar.' });
-    }
-    res.json({ message: 'Registrasi berhasil! 5 token trial aktif.', userId: this.lastID, tokens: 5 });
-  });
-});
-
-// 4. Endpoint Cek Saldo
-app.get('/api/user/:id', (req, res) => {
-  db.get(`SELECT id, email, token_balance FROM users WHERE id = ?`, [req.params.id], (err, row) => {
-    if (err || !row) return res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
-    res.json(row);
-  });
-});
-
-// 5. Endpoint Eksekusi Fitur Utama (Potong 1 Token)
-app.post('/api/execute-task', (req, res) => {
-  const { userId, inputData } = req.body;
-
-  if (!userId) return res.status(400).json({ error: 'User ID wajib disertakan.' });
-
-  db.get(`SELECT token_balance FROM users WHERE id = ?`, [userId], (err, user) => {
-    if (err || !user) return res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
-    if (user.token_balance < 1) {
-      return res.status(403).json({ error: 'Saldo token habis. Silakan hubungi admin.' });
-    }
-
-    // Ganti teks output ini sesuai logika sistem Anda nantinya
-    const outputSistem = `Data berhasil dianalisis: "${inputData}". (Hasil diagnosis/rekap siap dipakai).`;
-
-    db.run(`UPDATE users SET token_balance = token_balance - 1 WHERE id = ?`, [userId], function (err) {
-      if (err) return res.status(500).json({ error: 'Gagal memotong token.' });
-
-      db.run(`INSERT INTO token_logs (user_id, amount, action) VALUES (?, -1, 'EXECUTE_FEATURE')`, [userId]);
-
-      res.json({
-        success: true,
-        remainingTokens: user.token_balance - 1,
-        result: outputSistem
+    try {
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
       });
-    });
-  });
-});
+      const data = await res.json();
+      if (!res.ok) return showStatus(status, data.error, true);
 
-// 6. Endpoint Menampilkan Halaman Utama
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+      currentUserId = data.userId;
+      localStorage.setItem('koas_user_id', currentUserId);
+      loadUserData(currentUserId);
+    } catch (err) {
+      showStatus(status, 'Gagal terhubung ke server.', true);
+    }
+  }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server aktif di port ${PORT}`));
+  async function loadUserData(userId) {
+    try {
+      const res = await fetch(`/api/user/${userId}`);
+      const data = await res.json();
+      if (res.ok) {
+        document.getElementById('authSection').style.display = 'none';
+        document.getElementById('mainSection').style.display = 'block';
+        updateTokenBadge(data.token_balance);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function runTask() {
+    const inputVal = document.getElementById('taskInput').value.trim();
+    const btn = document.getElementById('processBtn');
+    const status = document.getElementById('taskStatus');
+    const outputArea = document.getElementById('outputArea');
+    const resultText = document.getElementById('resultText');
+
+    if (!inputVal) return showStatus(status, 'Teks tidak boleh kosong.', true);
+
+    btn.disabled = true;
+    btn.innerText = 'Memproses...';
+    status.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/execute-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUserId, inputData: inputVal })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showStatus(status, data.error, true);
+        btn.disabled = false;
+        btn.innerText = 'Jalankan Sistem (Pakai 1 Token)';
+        return;
+      }
+
+      outputArea.style.display = 'block';
+      resultText.innerText = data.result;
+      updateTokenBadge(data.remainingTokens);
+      showStatus(status, 'Berhasil! Saldo berkurang 1 token.', false);
+    } catch (err) {
+      showStatus(status, 'Gagal memproses data.', true);
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Jalankan Sistem (Pakai 1 Token)';
+    }
+  }
+
+  function updateTokenBadge(tokens) {
+    document.getElementById('tokenDisplay').innerText = tokens;
+    const btn = document.getElementById('processBtn');
+    if (tokens <= 0) {
+      btn.disabled = true;
+      btn.innerText = 'Token Habis';
+    } else {
+      btn.disabled = false;
+      btn.innerText = 'Jalankan Sistem (Pakai 1 Token)';
+    }
+  }
+
+  function showStatus(elem, text, isError) {
+    elem.innerText = text;
+    elem.className = 'status-msg ' + (isError ? 'status-error' : 'status-success');
+  }
+</script>
+
+</body>
+</html>
